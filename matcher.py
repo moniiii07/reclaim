@@ -395,6 +395,20 @@ def load_reports(path: str = DATA_FILE):
         return list(csv.DictReader(fh))
 
 
+def ensure_schema(path: str, fields) -> bool:
+    """If `path` was written by an older version of the app (different columns), move it aside to
+    `<path>.bak` so it can't crash the app or get new rows appended under the wrong header.
+    Returns True if a file was moved."""
+    if not os.path.exists(path):
+        return False
+    with open(path, "r", newline="", encoding="utf-8") as fh:
+        header = next(csv.reader(fh), [])
+    if header == list(fields):
+        return False
+    os.replace(path, path + ".bak")
+    return True
+
+
 def save_report(report: dict, path: str = DATA_FILE):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     exists = os.path.exists(path)
@@ -417,6 +431,7 @@ def next_id(reports, prefix: str = "") -> str:
 
 def seed_demo_data(path: str = DATA_FILE, source_dir: str = "data") -> int:
     """First run only: fill an empty store with the synthetic evaluation reports so the demo has data."""
+    ensure_schema(path, FIELDS)
     if os.path.exists(path):
         return 0
     n = 0
@@ -456,6 +471,7 @@ def record_notification(lost_report: dict, found_report: dict, score: float, aut
                         path: str = NOTIFICATION_FILE) -> bool:
     """Log a potential-match alert for the person who reported the item LOST, using the contact
     THEY supplied (delivery by e-mail/SMS is future work). Returns False if this pair was already logged."""
+    ensure_schema(path, NOTIFY_FIELDS)
     pair = (str(lost_report.get("id", "")), str(found_report.get("id", "")))
     if os.path.exists(path):
         with open(path, "r", newline="", encoding="utf-8") as fh:
@@ -474,4 +490,5 @@ def record_notification(lost_report: dict, found_report: dict, score: float, aut
 
 
 def load_notifications(path: str = NOTIFICATION_FILE):
+    ensure_schema(path, NOTIFY_FIELDS)
     return load_reports(path)
