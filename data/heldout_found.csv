@@ -1,0 +1,19 @@
+id,type,item,description,location,contact
+F1,found,flask,silver steel thermos with dent at bottom,physics block,x
+F2,found,lunch box,yellow tiffin box,canteen area,x
+F3,found,mobile,white apple iphone in clear cover,bus bay,x
+F4,found,backpack,dark blue laptop backpack,computer science dept,x
+F5,found,earphones,red jbl over-ear headphones,study hall,x
+F6,found,wallet,black leather wallet with cash,gate,x
+F7,found,muffler,maroon wool muffler,auditorium,x
+F8,found,glasses,gold round frame glasses,first floor corridor,x
+F9,found,book,"green record notebook, name on cover",room 305,x
+F10,found,adapter,dark samsung charger,seminar hall,x
+F11,found,flask,blue steel flask,physics lab,x
+F12,found,phone,black iphone,bus bay,x
+F13,found,bag,red laptop bag,cse department,x
+F14,found,headphones,black sony headphones,study room,x
+F15,found,wallet,brown wallet,main gate,x
+F16,found,glasses,black round glasses,corridor,x
+F17,found,charger,white apple charger,seminar hall,x
+F18,found,book,blue record book,class 305,x

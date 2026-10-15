@@ -1,0 +1,27 @@
+id,type,item,description,location,contact,true_match
+L1,lost,water bottle,black water bottle with a sticker,library,owner@x.edu,F1
+L2,lost,wallet,brown leather wallet with college id inside,canteen,owner@x.edu,F2
+L3,lost,phone,blue Samsung phone with cracked screen,main block,owner@x.edu,F3
+L4,lost,laptop,silver HP laptop with a sticker on the lid,lab 3,owner@x.edu,F4
+L5,lost,backpack,red Wildcraft backpack with a keychain,bus stop,owner@x.edu,F5
+L6,lost,earphones,white boat earphones in a black case,seminar hall,owner@x.edu,F6
+L7,lost,id card,student id card with blue lanyard,parking area,owner@x.edu,F7
+L8,lost,umbrella,green folding umbrella,admin block,owner@x.edu,F8
+L9,lost,keys,bunch of keys with a red keychain,hostel gate,owner@x.edu,F9
+L10,lost,watch,black Casio digital watch,gym,owner@x.edu,F10
+L11,lost,glasses,black framed spectacles in a brown case,library,owner@x.edu,F11
+L12,lost,charger,white Apple charger with cable,cafeteria,owner@x.edu,F12
+L13,lost,book,blue data structures textbook with name written,class 204,owner@x.edu,F13
+L14,lost,calculator,grey Casio scientific calculator,exam hall,owner@x.edu,F14
+L15,lost,pen drive,red 32GB pen drive,computer lab,owner@x.edu,F15
+L16,lost,power bank,black Redmi power bank with scratches,bus stop,owner@x.edu,F16
+L17,lost,bottle,blue Milton bottle with dent,sports ground,owner@x.edu,F17
+L18,lost,handbag,pink handbag with a name tag,auditorium,owner@x.edu,F18
+L19,lost,headphones,black Sony headphones,library,owner@x.edu,F19
+L20,lost,smartwatch,black Fastrack smartwatch with strap,hostel,owner@x.edu,F20
+L21,lost,laptop,white Asus laptop,library,owner@x.edu,
+L22,lost,guitar,brown acoustic guitar,auditorium,owner@x.edu,
+L23,lost,jacket,grey hoodie with zip,gym,owner@x.edu,
+L24,lost,tablet,silver Samsung tablet,seminar hall,owner@x.edu,
+L25,lost,bicycle,green cycle with basket,parking,owner@x.edu,
+L26,lost,lunch box,orange lunch box,canteen,owner@x.edu,

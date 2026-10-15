@@ -1,0 +1,35 @@
+id,type,item,description,location,contact
+F1,found,bottle,dark coloured bottle with a label,outside the library,finder@x.edu
+F2,found,purse,tan leather wallet containing a student card,near the canteen,finder@x.edu
+F3,found,mobile,blue samsung smartphone with a crack on the display,main building,finder@x.edu
+F4,found,laptop,grey hp notebook computer with stickers on cover,computer lab 3,finder@x.edu
+F5,found,bag,red wildcraft rucksack with key chain attached,near bus stop,finder@x.edu
+F6,found,earbuds,white boat earbuds with dark case,seminar hall,finder@x.edu
+F7,found,identity card,college id with blue strap,parking,finder@x.edu
+F8,found,umbrella,green foldable umbrella,near admin block,finder@x.edu
+F9,found,key,set of keys with red key ring,hostel entrance,finder@x.edu
+F10,found,wristwatch,dark casio digital wrist watch,gymnasium,finder@x.edu
+F11,found,spectacles,dark frame glasses with brown case,library reading hall,finder@x.edu
+F12,found,adapter,white apple adapter and cable,cafeteria,finder@x.edu
+F13,found,textbook,blue book on data structures with a name on it,classroom 204,finder@x.edu
+F14,found,calculator,silver casio scientific calculator,examination hall,finder@x.edu
+F15,found,usb drive,red 32gb flash drive,computer lab,finder@x.edu
+F16,found,powerbank,dark redmi power bank scratched,bus stop,finder@x.edu
+F17,found,flask,blue milton flask with a dent,ground,finder@x.edu
+F18,found,bag,pink handbag with name tag,auditorium,finder@x.edu
+F19,found,headset,dark sony headphones,reading room library,finder@x.edu
+F20,found,watch,dark fastrack smart watch,hostel corridor,finder@x.edu
+F21,found,bottle,red water bottle with a sticker,library,finder@x.edu
+F22,found,wallet,black wallet with cards,canteen,finder@x.edu
+F23,found,phone,black oneplus phone,main block,finder@x.edu
+F24,found,laptop,black dell laptop,lab 3,finder@x.edu
+F25,found,bag,blue skybags backpack,bus stop,finder@x.edu
+F26,found,umbrella,black umbrella,gate,finder@x.edu
+F27,found,keys,single silver key,parking,finder@x.edu
+F28,found,book,yellow physics notebook,class 101,finder@x.edu
+F29,found,id card,id card with red lanyard,admin block,finder@x.edu
+F30,found,earphones,black jbl earphones,gym,finder@x.edu
+F31,found,watch,gold titan analog watch,cafeteria,finder@x.edu
+F32,found,glasses,sunglasses with white frame,sports ground,finder@x.edu
+F33,found,charger,black samsung charger,hostel,finder@x.edu
+F34,found,calculator,black calculator,library,finder@x.edu

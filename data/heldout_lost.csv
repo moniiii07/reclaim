@@ -1,0 +1,14 @@
+id,type,item,description,location,contact,true_match
+L1,lost,thermos,"steel thermos flask, silver, has a dent",physics lab,x,F1
+L2,lost,tiffin,yellow tiffin carrier,canteen,x,F2
+L3,lost,phone,white iPhone with transparent case,bus bay,x,F3
+L4,lost,bag,navy blue laptop bag,cse department,x,F4
+L5,lost,headphones,red JBL headphones,study room,x,F5
+L6,lost,wallet,black wallet with 500 rupee note,main gate,x,F6
+L7,lost,scarf,maroon woollen scarf,auditorium,x,F7
+L8,lost,spectacles,round gold spectacles,corridor,x,F8
+L9,lost,notebook,green record book with name,class 305,x,F9
+L10,lost,charger,black Samsung fast charger,seminar hall,x,F10
+L11,lost,camera,black Canon camera,sports ground,x,
+L12,lost,shoes,white running shoes,gym,x,
+L13,lost,helmet,red helmet,parking,x,
