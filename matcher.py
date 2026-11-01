@@ -306,15 +306,21 @@ def _marks(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
-def _parse_date(d) -> date:
-    return d if isinstance(d, date) else pd.to_datetime(d).date()
+def _parse_date(d) -> date | None:
+    """Parse a date; return None when it is missing or unreadable (blank, NaT, junk)."""
+    if d is None or (not isinstance(d, str) and pd.isna(d)):   # None / NaN / NaT
+        return None
+    if isinstance(d, date):
+        return d
+    ts = pd.to_datetime(d, errors="coerce")
+    return None if pd.isna(ts) else ts.date()
 
 
 def time_score(lost_date, found_date) -> float:
-    try:
-        days = (_parse_date(found_date) - _parse_date(lost_date)).days
-    except Exception:           # missing / unreadable date -> neutral
+    a, b = _parse_date(lost_date), _parse_date(found_date)
+    if a is None or b is None:          # missing date -> neutral
         return 0.5
+    days = (b - a).days
     return 0.2 if days < 0 else math.exp(-days / 7)
 
 
