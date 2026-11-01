@@ -23,11 +23,15 @@ if not os.path.exists(DATA):
 
 st.set_page_config(page_title="ReClaim", page_icon="🔎", layout="wide")
 
-# Streamlit Cloud: pick up keys from st.secrets (optional)
+# Streamlit Cloud: copy root-level Secrets into environment variables used by
+# notifier.py. SMTP_USERNAME is the canonical name; SMTP_USER is retained only
+# for older deployments that already used it.
 try:
-    for k in ("ANTHROPIC_API_KEY", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"):
+    for k in ("ANTHROPIC_API_KEY", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM"):
         if k in st.secrets and not os.getenv(k):
             os.environ[k] = str(st.secrets[k])
+    if not os.getenv("SMTP_USERNAME") and os.getenv("SMTP_USER"):
+        os.environ["SMTP_USERNAME"] = os.environ["SMTP_USER"]
 except Exception:
     pass
 
@@ -43,10 +47,23 @@ def mask_contact(c: str) -> str:
 
 
 def already_notified(lost_id: str, found_id: str) -> bool:
+    """Suppress duplicates only after SMTP accepted the email.
+
+    A simulated or failed notification must be retried after the SMTP secrets
+    are corrected, so it must not block later deliveries.
+    """
     if not os.path.exists(NOTIFY_LOG):
         return False
-    log = pd.read_csv(NOTIFY_LOG, dtype=str)
-    return bool(((log.lost_id == lost_id) & (log.found_id == found_id)).any())
+    try:
+        log = pd.read_csv(NOTIFY_LOG, dtype=str, keep_default_na=False)
+        required = {"lost_id", "found_id", "status"}
+        if not required.issubset(log.columns):
+            return False
+        sent = log["status"].str.strip().str.lower().eq("sent")
+        same_match = log["lost_id"].eq(str(lost_id)) & log["found_id"].eq(str(found_id))
+        return bool((same_match & sent).any())
+    except (OSError, pd.errors.EmptyDataError):
+        return False
 
 
 def notify_owner(lost_row: dict, found_row: dict, confidence: float, auto: bool) -> str:
@@ -115,7 +132,7 @@ with st.sidebar:
                    "notifications are only logged.")
         for env, label, pw in (("SMTP_HOST", "SMTP host (e.g. smtp.gmail.com)", False),
                                ("SMTP_PORT", "Port (587 or 465)", False),
-                               ("SMTP_USER", "SMTP user", False),
+                               ("SMTP_USERNAME", "SMTP user", False),
                                ("SMTP_PASSWORD", "SMTP password / app password", True),
                                ("SMTP_FROM", "From address (optional)", False)):
             val = st.text_input(label, value=os.getenv(env, ""), type="password" if pw else "default")
