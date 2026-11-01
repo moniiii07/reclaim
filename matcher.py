@@ -265,20 +265,28 @@ def _colors(a: set, b: set) -> float:
 
 
 def _parse_date(d: Any) -> Optional[date]:
-    """Parse a date; return None when it is missing or unreadable (blank, NaT, junk)."""
-    if d is None or (not isinstance(d, str) and pd.isna(d)):   # None / NaN / NaT
+    """Return a plain ``date`` or None for blanks, NaT, NaN, and invalid input."""
+    if d is None:
         return None
-    if isinstance(d, date):
-        return d
-    ts = pd.to_datetime(d, errors="coerce")
-    return None if pd.isna(ts) else ts.date()
+    try:
+        # Parse before checking ``date``: pandas.NaT can satisfy date-like
+        # checks, but it must never be returned to arithmetic code.
+        ts = pd.to_datetime(d, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.date() if hasattr(ts, "date") else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def time_score(lost_date, found_date) -> float:
     a, b = _parse_date(lost_date), _parse_date(found_date)
-    if a is None or b is None:          # missing date -> neutral
+    if a is None or b is None:          # missing / invalid date -> neutral
         return 0.5
-    days = (b - a).days
+    try:
+        days = (b - a).days
+    except (TypeError, ValueError, OverflowError):
+        return 0.5
     return 0.2 if days < 0 else math.exp(-days / 7)
 
 
