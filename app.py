@@ -1,203 +1,277 @@
-"""ReClaim - Streamlit front end for the AI Lost & Found Matching System.
-
-All matching / storage / privacy logic lives in matcher.py (and is unit-tested there);
-this file only handles layout and session state.
-
-Privacy model
-  * lost report  -> the owner sees candidate FOUND items; the finder's contact is revealed only after
-                    the owner clicks "This is my item".
-  * found report -> the finder never sees an owner's contact; likely owners are notified using the
-                    contact THEY supplied, and the notification log shows masked contacts only.
-"""
 import os
+import shutil
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-import matcher as M
+import notifier
+from matcher import (LIKELY_T, POSSIBLE_T, Embedder, extract_attributes, find_matches,
+                     get_index, llm_available, nlp_backend)
 
-st.set_page_config(page_title="ReClaim - AI Lost & Found", page_icon="🔎", layout="wide")
+DATA = "data/reports.csv"
+NOTIFY_LOG = "data/notifications.csv"
+
+os.makedirs("data", exist_ok=True)
+if not os.path.exists(DATA):
+    shutil.copy("data/sample_reports.csv", DATA)
+
+st.set_page_config(page_title="ReClaim", page_icon="🔎", layout="wide")
+
+# Streamlit Cloud: pick up keys from st.secrets (optional)
+try:
+    for k in ("ANTHROPIC_API_KEY", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"):
+        if k in st.secrets and not os.getenv(k):
+            os.environ[k] = str(st.secrets[k])
+except Exception:
+    pass
+
+
+def mask_contact(c: str) -> str:
+    """Show just enough of a contact to prove it exists, without revealing it."""
+    c = c.strip()
+    if "@" in c:
+        name, _, domain = c.partition("@")
+        return f"{name[:2]}{'*' * max(len(name) - 2, 2)}@{domain}"
+    digits = "".join(ch for ch in c if ch.isdigit())
+    return f"{'*' * max(len(digits) - 2, 2)}{digits[-2:]}" if digits else "****"
+
+
+def already_notified(lost_id: str, found_id: str) -> bool:
+    if not os.path.exists(NOTIFY_LOG):
+        return False
+    log = pd.read_csv(NOTIFY_LOG, dtype=str)
+    return bool(((log.lost_id == lost_id) & (log.found_id == found_id)).any())
+
+
+def notify_owner(lost_row: dict, found_row: dict, confidence: float, auto: bool) -> str:
+    """E-mail the person who reported the item lost, using the contact THEY provided
+    (the finder never sees or enters it). Returns the delivery status."""
+    subject, body = notifier.build_message(found_row, confidence)
+    status, detail = notifier.send_email(lost_row["contact"], subject, body)
+    entry = pd.DataFrame([{
+        "lost_id": lost_row["id"], "found_id": found_row["id"],
+        "notified_contact": lost_row["contact"], "confidence": round(confidence, 2),
+        "auto": auto, "status": status, "detail": detail,
+        "sent_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+    }])
+    entry.to_csv(NOTIFY_LOG, mode="a", header=not os.path.exists(NOTIFY_LOG), index=False)
+    return status
 
 
 @st.cache_resource(show_spinner="Loading embedding model...")
 def get_embedder():
-    return M.Embedder()
+    return Embedder()
 
 
-def secret_to_env():
-    """Let the app owner provide a shared LLM key / model name via Streamlit Cloud secrets."""
-    try:
-        for k in ("ANTHROPIC_API_KEY", "LLM_MODEL", "EMBED_BACKEND"):
-            if k in st.secrets and not os.environ.get(k):
-                os.environ[k] = st.secrets[k]
-    except Exception:
-        pass  # no secrets file locally - that's fine
+def load() -> pd.DataFrame:
+    return pd.read_csv(DATA, dtype=str, keep_default_na=False)
 
 
-secret_to_env()
-M.seed_demo_data()          # first run only: demo reports from data/eval_*.csv
+def add_report(rtype, desc, loc, d, contact) -> str:
+    df = load()
+    prefix = "L" if rtype == "lost" else "F"
+    n = sum(df.id.str.startswith(prefix)) + 1
+    rid = f"{prefix}{n}"
+    while rid in set(df.id):
+        n += 1
+        rid = f"{prefix}{n}"
+    row = {"id": rid, "type": rtype, "description": desc, "location": loc,
+           "date": str(d), "contact": contact, "match_id": ""}
+    pd.concat([df, pd.DataFrame([row])]).to_csv(DATA, index=False)
+    return rid
 
-# Draw the page header BEFORE loading the (large) embedding model, so the app is never just blank.
-st.title("🔎 AI Lost & Found Matching System")
-st.caption("Semantic matching of lost and found reports. Results are *potential* matches - "
-           "ownership must be confirmed by the owner or authorised staff.")
+
+st.session_state.setdefault("confirmed", set())
 embedder = get_embedder()
 
-ss = st.session_state
-VIEW_VERSION = 2                     # bump when the shape of stored results changes
-if ss.get("view") and ss["view"].get("v") != VIEW_VERSION:
-    ss["view"] = None                # stale results from before an app update - discard, don't render
-ss.setdefault("view", None)          # last submitted report + its match results
-ss.setdefault("confirmed", set())    # (lost_id, found_id) pairs the owner confirmed -> contact revealed
-ss.setdefault("notified", set())     # (lost_id, found_id) pairs the finder manually notified
-
-ICON = {"Likely Match": "🟢", "Possible Match": "🟡"}
-
-# ---------------------------------------------------------------- sidebar
+# ---------------- Sidebar ----------------
 with st.sidebar:
     st.title("🔎 ReClaim")
     st.caption("AI Lost & Found Matching System")
-    typed_key = st.text_input(
-        "Anthropic API key (optional)", type="password",
-        help="Enables LLM verification of candidate matches. Kept only in your browser session.")
-    # The key stays in this session and is passed to the matcher per call - it is NOT written to
-    # os.environ, which would share it with every other visitor of the app.
-    api_key = typed_key.strip() or os.environ.get("ANTHROPIC_API_KEY", "")
-    use_llm = st.toggle("LLM verification", value=bool(api_key), disabled=not api_key) and bool(api_key)
-    st.caption(f"Embeddings: `{embedder.backend}`")
-    st.caption(f"Verification: `{'LLM (' + M.LLM_MODEL + ')' if use_llm else 'rule-based fallback'}`")
-    st.caption(f"Likely ≥ {M.LIKELY_T:.0%} · Possible ≥ {M.POSSIBLE_T:.0%}")
-    count_slot = st.empty()
+    key = st.text_input("Anthropic API key (optional)", type="password",
+                        help="Enables LLM verification of top candidates.")
+    if key:
+        os.environ["ANTHROPIC_API_KEY"] = key
+    use_llm = st.toggle("LLM verification", value=llm_available(), disabled=not llm_available())
+    top_k = st.slider("Matches to show", 1, 10, 5)
 
-# ---------------------------------------------------------------- actions
-def submit_report(kind: str, item: str, description: str, location: str, contact: str):
-    """Save the report, run matching once, and keep the results in session state."""
-    reports = M.load_reports()
-    rtype = "lost" if kind == "I lost something" else "found"
-    report = {"id": M.next_id(reports, "L" if rtype == "lost" else "F"), "type": rtype,
-              "item": item, "description": description, "location": location, "contact": contact}
-    M.save_report(report)
-    kw = dict(embedder=embedder, use_llm=use_llm, api_key=api_key or None)
+    with st.expander("📧 E-mail notification (SMTP)"):
+        st.caption("Needed to send real e-mails to lost-item owners. Without it, "
+                   "notifications are only logged.")
+        for env, label, pw in (("SMTP_HOST", "SMTP host (e.g. smtp.gmail.com)", False),
+                               ("SMTP_PORT", "Port (587 or 465)", False),
+                               ("SMTP_USER", "SMTP user", False),
+                               ("SMTP_PASSWORD", "SMTP password / app password", True),
+                               ("SMTP_FROM", "From address (optional)", False)):
+            val = st.text_input(label, value=os.getenv(env, ""), type="password" if pw else "default")
+            if val:
+                os.environ[env] = val
+        st.caption(f"Status: **{'configured' if notifier.smtp_configured() else 'not configured'}**")
 
-    with st.spinner("Searching for matches..."):
-        if rtype == "lost":
-            ss.view = {"v": VIEW_VERSION, "kind": "lost", "report": report, "matches": M.search_lost_item(report, **kw)}
-        else:
-            hits = []
-            for lost in (r for r in reports if r.get("type") == "lost"):
-                res = M.find_matches(lost, [report], **kw)
-                if res:
-                    hits.append({"lost": lost, "match": res[0]})
-            hits.sort(key=lambda h: -h["match"]["confidence"])
-            auto = sum(1 for h in hits if h["match"]["label"] == "Likely Match"
-                       and M.record_notification(h["lost"], report, h["match"]["confidence"], auto=True))
-            ss.view = {"v": VIEW_VERSION, "kind": "found", "report": report, "hits": hits, "auto": auto}
+    st.caption(f"NLP: **{nlp_backend()}** | Embeddings: **{embedder.kind}**")
+    st.caption(f"LLM: **{'on' if use_llm else 'off'}**")
+    st.caption(f"Likely ≥ {LIKELY_T:.0%} · Possible ≥ {POSSIBLE_T:.0%}")
+
+st.info("ℹ️ Scores indicate a **potential match only**. They do not confirm ownership or prove that two "
+        "reports describe the same object. Final confirmation rests with the users or administrators.")
+
+STATUS_TEXT = {"sent": "e-mailed", "simulated": "logged (e-mail not configured)",
+               "no_email": "logged (no e-mail address on the lost report)", "failed": "logged (e-mail failed)"}
 
 
-def breakdown(m: dict):
-    v = m["verification"]
-    with st.expander("Why this score?"):
-        st.write(f"Semantic similarity: **{max(m['similarity'], 0):.0%}** | "
-                 f"Attribute agreement: **{m['attribute_score']:.0%}**")
-        st.info(f"Verifier ({v['source']}): **{v['verdict']}** - {v['reason']}")
+def show_matches(query: dict, scope: str = "t"):
+    """query['type'] is the CURRENT poster's perspective.
 
+    - 'lost': they're browsing found items for their own lost item -> they may confirm
+      a match themselves, which reveals the finder's contact.
+    - 'found': they're a finder whose report is matched against lost reports -> they never
+      see the owner's contact. The system notifies that owner instead, using the e-mail
+      THAT owner supplied in their lost report."""
+    df = load()
+    perspective = query["type"]
+    other = "found" if perspective == "lost" else "lost"
+    pool = df[df.type == other]
 
-def render_lost_view(view: dict):
-    lost, matches = view["report"], view["matches"]
-    likely = [m for m in matches if m["label"] == "Likely Match"]
+    with st.spinner("Matching..."):
+        results = find_matches(query, pool, embedder, use_llm=use_llm, top_k=top_k)
+
+    icons = {"Likely": "🟢", "Possible": "🟡", "Unlikely": "🔴"}
+    likely = [r for r in results if r["label"] == "Likely"]
+    possible = [r for r in results if r["label"] == "Possible"]
+
+    # What the system understood (text processing + attribute extraction stages)
+    attrs = extract_attributes(query["description"])
+    with st.expander("🧠 What the system understood from your description"):
+        st.write(f"**Item type:** {attrs['type'] or '—'} · **Colours:** {', '.join(sorted(attrs['colors'])) or '—'} · "
+                 f"**Brand:** {attrs['brand'] or '—'}")
+        st.write(f"**Distinctive marks:** {', '.join(sorted(attrs['marks'])) or '—'} · "
+                 f"**Place mentioned:** {attrs['place'] or '—'}")
+        if len(pool):
+            idx = get_index(embedder, pool["description"].tolist())
+            st.caption(f"Compared against {len(pool)} stored {other} report(s) using a "
+                       f"{idx.backend.upper()} vector index.")
+
     if likely:
-        best = likely[0]
-        st.success(f"✅ **Match found!** Best match: found item **#{best['report'].get('id', '?')}** "
-                   f"({best['confidence']:.0%} confidence).")
-    elif matches:
-        st.warning(f"🟡 No confident match, but {len(matches)} possible match(es) - please review them below.")
+        best = max(likely, key=lambda r: r["confidence"])
+        extra = f" + {len(likely) - 1} more likely match(es)" if len(likely) > 1 else ""
+        st.success(f"✅ **Match found!** Best match: **{best['row']['id']}** "
+                   f"({best['confidence']:.0%} confidence){extra}.")
+    elif possible:
+        st.warning(f"🟡 **No confident match, but {len(possible)} possible match(es) found.** "
+                   "Please review them below.")
+    elif perspective == "lost":
+        st.error("❌ **No matching item found yet.** Your report is saved. "
+                 "Check back later, as new found reports are matched against it.")
     else:
-        st.info("No potential matches yet. Your report is saved and will be checked against future found reports.")
+        st.error("❌ **No matching lost report found yet.** Your report is saved and "
+                 "will be included when owners search for their lost items.")
 
-    for m in matches:
-        r = m["report"]
-        ckey = (lost["id"], r["id"])
+    results = [r for r in results if r["label"] != "Unlikely"]
+    if results:
+        st.subheader(f"Potential matches ({len(results)})")
+
+    if perspective == "found" and results:
+        qid = query.get("id", "new")
+        statuses = []
+        for r in results:
+            if r["label"] != "Likely":
+                continue
+            ckey = (qid, r["row"]["id"])
+            if ckey in st.session_state.confirmed or already_notified(r["row"]["id"], qid):
+                continue
+            statuses.append(notify_owner(r["row"], query, r["confidence"], auto=True))
+            st.session_state.confirmed.add(ckey)
+        if statuses:
+            summary = ", ".join(f"{statuses.count(s)} {STATUS_TEXT[s]}" for s in dict.fromkeys(statuses))
+            st.success(f"📩 Likely owner(s) notified using the contact they gave in their lost report: {summary}. "
+                       "You won't see their contact - they'll reach out if they confirm it's their item.")
+
+    for r in results:
+        row = r["row"]
         with st.container(border=True):
             c1, c2 = st.columns([4, 1])
-            c1.markdown(f"**#{r.get('id', '?')}** · *{r.get('item') or 'item'}* - {r.get('description', '')}")
-            c1.caption(f"📍 {r.get('location', '')}")
-            c2.metric(f"{ICON[m['label']]} {m['label']}", f"{m['confidence']:.0%}")
-            st.progress(float(min(max(m["confidence"], 0.0), 1.0)))
-            breakdown(m)
-            if ckey in ss.confirmed:
-                st.success(f"Match confirmed. Finder's contact: {r.get('contact') or 'not provided'}")
-            elif st.button("✅ This is my item", key=f"confirm_{lost['id']}_{r['id']}"):
-                ss.confirmed.add(ckey)
-                st.rerun()
+            c1.markdown(f"**{row['id']}** · {row['description']}")
+            c1.caption(f"📍 {row['location']} · 📅 {row['date']}")
+            c2.metric(f"{icons[r['label']]} {r['label']}", f"{r['confidence']:.0%}")
+            st.progress(float(min(max(float(r["confidence"]), 0.0), 1.0)))
+            with st.expander("Why this score?"):
+                st.write(f"Semantic similarity: **{r['semantic']:.0%}** | "
+                         f"Attribute match: **{r['attribute']:.0%}** | "
+                         f"Location: **{r['location']:.0%}** | Time: **{r['time']:.0%}**"
+                         + (f" | LLM: **{r['llm']:.0%}**" if r["llm"] is not None else ""))
+                if r["llm_reason"]:
+                    st.info(f"LLM: {r['llm_reason']}")
+                if r["llm_similarities"]:
+                    st.markdown("**Similarities:** " + "; ".join(r["llm_similarities"]))
+                if r["llm_differences"]:
+                    st.markdown("**Differences:** " + "; ".join(r["llm_differences"]))
+                if r["veto"]:
+                    st.warning(f"Score capped: {r['veto']}")
+
+            ckey = (query.get("id", "new"), row["id"])
+            if perspective == "lost":
+                if ckey in st.session_state.confirmed:
+                    st.success(f"Match confirmed. Finder's contact: {row['contact']}")
+                elif st.button("✅ This is my item", key=f"c_{scope}_{ckey}"):
+                    st.session_state.confirmed.add(ckey)
+                    st.rerun()
+                else:
+                    st.caption("🔒 The finder's contact is revealed after you confirm the match.")
             else:
-                st.caption("🔒 The finder's contact is revealed after you confirm the match.")
+                if ckey in st.session_state.confirmed or already_notified(row["id"], ckey[0]):
+                    st.success(f"📩 Owner notified at {mask_contact(row['contact'])}. "
+                               "They'll contact you if they confirm it's their item.")
+                elif r["label"] != "Likely":
+                    if st.button("🔔 Notify this person anyway", key=f"c_{scope}_{ckey}"):
+                        notify_owner(row, query, r["confidence"], auto=False)
+                        st.session_state.confirmed.add(ckey)
+                        st.rerun()
 
 
-def render_found_view(view: dict):
-    found, hits = view["report"], view["hits"]
-    if not hits:
-        st.info("No matching lost report yet. Your report is saved and will be shown to owners who search later.")
-    else:
-        st.warning(f"This found item may match {len(hits)} lost report(s):")
-    if view["auto"]:
-        st.success(f"📩 Auto-notified {view['auto']} likely owner(s) using the contact they gave in their lost "
-                   "report. You won't see their contact - they'll reach out if they confirm it's their item.")
+tab1, tab2, tab3 = st.tabs(["➕ Submit a report", "🔍 Search existing report", "📋 All reports"])
 
-    for h in hits:
-        lost, m = h["lost"], h["match"]
-        ckey = (lost["id"], found["id"])
-        with st.container(border=True):
-            c1, c2 = st.columns([4, 1])
-            c1.markdown(f"**Lost report #{lost.get('id', '?')}** · *{lost.get('item') or 'item'}* - {lost.get('description', '')}")
-            c1.caption(f"📍 {lost.get('location', '')}")
-            c2.metric(f"{ICON[m['label']]} {m['label']}", f"{m['confidence']:.0%}")
-            st.progress(float(min(max(m["confidence"], 0.0), 1.0)))
-            breakdown(m)
-            if m["label"] == "Likely Match" or ckey in ss.notified:
-                st.success(f"📩 Owner notified at {M.mask_contact(lost.get('contact'))}.")
-            elif st.button("🔔 Notify this person anyway", key=f"notify_{lost['id']}_{found['id']}"):
-                M.record_notification(lost, found, m["confidence"], auto=False)
-                ss.notified.add(ckey)
-                st.rerun()
-
-
-# ---------------------------------------------------------------- tabs
-tab_report, tab_browse = st.tabs(["➕ Submit a report", "📋 Browse reports"])
-
-with tab_report:
-    kind = st.radio("What are you reporting?", ["I lost something", "I found something"], horizontal=True)
-    with st.form("report_form", clear_on_submit=False):
-        item = st.text_input("Item (e.g. water bottle, wallet, phone)")
-        description = st.text_area("Description (colour, brand, marks, contents...)")
-        location = st.text_input("Location (where it was lost / found)")
+with tab1:
+    with st.form("report"):
+        rtype = st.radio("I have...", ["lost", "found"], horizontal=True,
+                         format_func=lambda x: "Lost an item" if x == "lost" else "Found an item")
+        desc = st.text_area("Describe the item",
+                            placeholder="e.g. Black water bottle with a sticker near the library")
+        c1, c2 = st.columns(2)
+        loc = c1.text_input("Where?", placeholder="e.g. Reading Hall")
+        d = c2.date_input("When?", value=date.today())
         contact = st.text_input(
-            "Your contact (email or phone)",
-            help="Lost: we notify YOU here when a match turns up. Found: shown to the owner only after "
-                 "they confirm the match. You never see anyone else's contact.")
-        submitted = st.form_submit_button("Submit and find matches", type="primary")
-
-    if submitted:
-        if not (description.strip() and location.strip() and contact.strip()):
-            st.error("Please fill in the description, location and contact.")
+            "Your contact (e-mail preferred)",
+            help="If lost: we e-mail YOU here when a match turns up. "
+                 "If found: this is shown to the owner only after they confirm the match - "
+                 "you never enter or see someone else's contact.")
+        ok = st.form_submit_button("Submit and find matches", type="primary")
+    if ok:
+        if not (desc.strip() and loc.strip() and contact.strip()):
+            st.error("Please fill in description, location and contact.")
         else:
-            submit_report(kind, item.strip(), description.strip(), location.strip(), contact.strip())
-            st.success(f"Report #{ss.view['report']['id']} saved.")
+            rid = add_report(rtype, desc.strip(), loc.strip(), d, contact.strip())
+            st.success(f"Report {rid} saved.")
+            if rtype == "lost" and not notifier.valid_email(contact):
+                st.warning("This contact is not an e-mail address, so e-mail alerts can't be sent to you.")
+            st.session_state.q1 = {"id": rid, "type": rtype, "description": desc.strip(),
+                                   "location": loc.strip(), "date": str(d)}
+    if st.session_state.get("q1"):
+        show_matches(st.session_state.q1, scope="t1")
 
-    if ss.view:
-        st.subheader("Potential matches")
-        (render_lost_view if ss.view["kind"] == "lost" else render_found_view)(ss.view)
+with tab2:
+    df = load()
+    pick = st.selectbox("Choose a report", df.id.tolist(),
+                        format_func=lambda i: f"{i} - {df.set_index('id').loc[i, 'description'][:70]}")
+    if st.button("Find matches", key="find"):
+        st.session_state.q2 = df.set_index("id").loc[pick].to_dict() | {"id": pick}
+    if st.session_state.get("q2"):
+        show_matches(st.session_state.q2, scope="t2")
 
-with tab_browse:
-    data = M.load_reports()
-    if not data:
-        st.write("No reports yet.")
-    else:
-        st.dataframe(pd.DataFrame(data).drop(columns=["contact"], errors="ignore"), hide_index=True)  # contacts stay private
-    log = M.load_notifications()
-    if log:
-        st.caption("Notifications sent to lost-item owners (contacts masked):")
-        df_log = pd.DataFrame(log)
-        df_log["owner_contact"] = df_log["owner_contact"].apply(M.mask_contact)
-        st.dataframe(df_log, hide_index=True)
-
-count_slot.caption(f"Stored reports: {len(M.load_reports())}")
+with tab3:
+    st.dataframe(load().drop(columns=["contact", "match_id"]), hide_index=True)
+    if os.path.exists(NOTIFY_LOG):
+        st.caption("Notifications to lost-item owners (contacts masked):")
+        log = pd.read_csv(NOTIFY_LOG)
+        log["notified_contact"] = log["notified_contact"].apply(mask_contact)
+        st.dataframe(log, hide_index=True)
