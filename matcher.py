@@ -30,8 +30,7 @@ LLM_MODEL = "claude-haiku-4-5-20251001"
 W_SEM, W_ATTR, W_LLM = 0.40, 0.30, 0.30
 LIKELY_T, POSSIBLE_T = 0.75, 0.50
 # attribute sub-weights (sum = 1.0)
-ATTR_W = {"type": 0.35, "color": 0.20, "brand": 0.15, "marks": 0.10,
-          "location": 0.10, "time": 0.10}
+ATTR_W = {"type": 0.40, "color": 0.25, "brand": 0.15, "location": 0.10, "time": 0.10}
 
 # --------------------------------------------------------------------------
 # 1. Lexicons
@@ -73,23 +72,6 @@ BRANDS = ["nike", "adidas", "puma", "apple", "samsung", "hp", "dell", "lenovo", 
 BRAND_ALIASES = {"iphone": "apple", "macbook": "apple", "ipad": "apple", "airpods": "apple",
                  "galaxy": "samsung", "thinkpad": "lenovo", "inspiron": "dell"}
 
-# Distinctive marks: stickers, labels, damage, shape ... (report section 4.1.2)
-MARK_SYNONYMS = {
-    "sticker": ["sticker"], "label": ["label", "tag", "name tag"],
-    "logo": ["logo", "emblem"], "scratch": ["scratch", "scratched", "scuff", "scuffed"],
-    "crack": ["crack", "cracked", "broken screen"], "dent": ["dent", "dented"],
-    "keychain": ["keychain", "key ring", "keyring"], "zipper": ["zipper", "zip"],
-    "strap": ["strap"], "stain": ["stain", "stained"],
-    "engraving": ["engraving", "engraved", "initials"],
-    "round": ["round", "circular"], "square": ["square"],
-    "rectangular": ["rectangular"], "oval": ["oval"],
-}
-
-_PLACE_RE = re.compile(
-    r"\b(?:near|outside|inside|in|at|behind|beside|opposite|by|around)\s+"
-    r"(?:the\s+)?([a-z0-9 ]{3,40}?)(?=\s+(?:with|and|on|which|that)\b|$)")
-
-
 def preprocess(text: str) -> str:
     """Stage 2 - text preprocessing: lower-case, strip punctuation/hyphens, collapse spaces."""
     t = re.sub(r"[^a-z0-9\s]", " ", str(text).lower())
@@ -114,8 +96,7 @@ def _get_nlp():
         except Exception:
             nlp, has_ner = spacy.blank("en"), False
         matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-        tables = (("ITEM", ITEM_SYNONYMS), ("COLOR", COLOR_SYNONYMS), ("MARK", MARK_SYNONYMS),
-                  ("BRAND", {b: [b] for b in BRANDS}),
+        tables = (("ITEM", ITEM_SYNONYMS), ("COLOR", COLOR_SYNONYMS), ("BRAND", {b: [b] for b in BRANDS}),
                   ("ALIAS", {b: [a] for a, b in BRAND_ALIASES.items()}))
         for label, table in tables:
             for canon, syns in table.items():
@@ -138,48 +119,32 @@ def _has(word: str, text: str) -> bool:
     return re.search(rf"\b{re.escape(word)}s?\b", text) is not None
 
 
-def _extract_place(t: str, doc=None) -> str | None:
-    m = _PLACE_RE.search(t)
-    if m:
-        return m.group(1).strip()
-    if doc is not None:                                   # spaCy NER fallback
-        for ent in getattr(doc, "ents", ()):
-            if ent.label_ in {"FAC", "LOC", "GPE"}:
-                return ent.text.lower()
-    return None
-
-
 def extract_attributes(text: str) -> dict:
-    """Return {type, colors, brand, marks, place} for a free-text description."""
+    """Return {type, colors, brand} for a free-text description."""
     t = preprocess(text)
     nlp = _get_nlp()
     if nlp:
         model, matcher, _ = nlp
         doc = model(t)
-        hits: dict[str, set] = {"ITEM": set(), "COLOR": set(), "MARK": set(),
-                                "BRAND": set(), "ALIAS": set()}
+        hits: dict[str, set] = {"ITEM": set(), "COLOR": set(), "BRAND": set(), "ALIAS": set()}
         for match_id, _s, _e in matcher(doc):
             label, canon = model.vocab.strings[match_id].split("|", 1)
             hits[label].add(canon)
         item = next((c for c in ITEM_SYNONYMS if c in hits["ITEM"]), None)
         brand = next((b for b in BRANDS if b in hits["BRAND"]), None) \
             or next(iter(sorted(hits["ALIAS"])), None)
-        return {"type": item, "colors": hits["COLOR"], "brand": brand,
-                "marks": hits["MARK"], "place": _extract_place(t, doc)}
+        return {"type": item, "colors": hits["COLOR"], "brand": brand}
     # ---- regex fallback ----
     item = next((c for c, syns in ITEM_SYNONYMS.items() if any(_has(s, t) for s in syns)), None)
     colors = {c for c, syns in COLOR_SYNONYMS.items() if any(_has(s, t) for s in syns)}
-    marks = {c for c, syns in MARK_SYNONYMS.items() if any(_has(s, t) for s in syns)}
     brand = next((b for b in BRANDS if _has(b, t)), None) \
         or next((b for a, b in BRAND_ALIASES.items() if _has(a, t)), None)
-    return {"type": item, "colors": colors, "brand": brand, "marks": marks,
-            "place": _extract_place(t)}
+    return {"type": item, "colors": colors, "brand": brand}
 
 
 def enrich_text(text: str, attrs: dict) -> str:
     """Append canonical attributes so 'rucksack' and 'backpack' share tokens."""
-    parts = [attrs["type"] or "", " ".join(sorted(attrs["colors"])), attrs["brand"] or "",
-             " ".join(sorted(attrs["marks"]))]
+    parts = [attrs["type"] or "", " ".join(sorted(attrs["colors"])), attrs["brand"] or ""]
     return " ".join(p for p in parts if p) + " " + preprocess(text)
 
 
@@ -300,12 +265,6 @@ def _colors(a: set, b: set) -> float:
     return matched / (len(a) + len(b) - matched)
 
 
-def _marks(a: set, b: set) -> float:
-    if not a or not b:
-        return 0.5
-    return len(a & b) / len(a | b)
-
-
 def _parse_date(d) -> date | None:
     """Parse a date; return None when it is missing or unreadable (blank, NaT, junk)."""
     if d is None or (not isinstance(d, str) and pd.isna(d)):   # None / NaN / NaT
@@ -327,7 +286,7 @@ def time_score(lost_date, found_date) -> float:
 def attribute_score(a: dict, b: dict, loc_sim: float, t_score: float) -> float:
     w = ATTR_W
     return (w["type"] * _eq(a["type"], b["type"]) + w["color"] * _colors(a["colors"], b["colors"])
-            + w["brand"] * _eq(a["brand"], b["brand"]) + w["marks"] * _marks(a["marks"], b["marks"])
+            + w["brand"] * _eq(a["brand"], b["brand"])
             + w["location"] * loc_sim + w["time"] * t_score)
 
 
@@ -349,8 +308,7 @@ def llm_available() -> bool:
 
 
 def _fmt(attrs: dict) -> str:
-    return (f"type={attrs['type']}, colours={sorted(attrs['colors'])}, brand={attrs['brand']}, "
-            f"marks={sorted(attrs['marks'])}, place={attrs['place']}")
+    return f"type={attrs['type']}, colours={sorted(attrs['colors'])}, brand={attrs['brand']}"
 
 
 def llm_verify(lost: dict, found: dict, lost_attrs: dict, found_attrs: dict) -> dict | None:
@@ -389,10 +347,6 @@ def label_for(score: float) -> str:
     return "Likely" if score >= LIKELY_T else "Possible" if score >= POSSIBLE_T else "Unlikely"
 
 
-def _loc_text(location: str, attrs: dict) -> str:
-    return f"{location} {attrs['place'] or ''}".strip()
-
-
 def find_matches(query: dict, pool: pd.DataFrame, embedder: Embedder,
                  use_llm: bool = False, top_k: int = 5, retrieve_k: int = 10) -> list[dict]:
     """query: dict with type/description/location/date. pool: opposite-type reports."""
@@ -407,9 +361,8 @@ def find_matches(query: dict, pool: pd.DataFrame, embedder: Embedder,
     # Stage 1: vector similarity search over the stored report embeddings -> shortlist
     index = get_index(embedder, p_texts)
     positions, sims = index.search(q_text, retrieve_k)
-    q_loc = _loc_text(query["location"], q_attrs)
-    locs = embedder.similarity([q_loc], [_loc_text(pool.iloc[i]["location"], p_attrs[i])
-                                         for i in positions])[0] if len(positions) else []
+    q_loc = query["location"]
+    locs = embedder.similarity([q_loc], [pool.iloc[i]["location"] for i in positions])[0] if len(positions) else []
 
     results = []
     for j, i in enumerate(positions):

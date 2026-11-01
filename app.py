@@ -159,8 +159,6 @@ def show_matches(query: dict, scope: str = "t"):
     with st.expander("🧠 What the system understood from your description"):
         st.write(f"**Item type:** {attrs['type'] or '—'} · **Colours:** {', '.join(sorted(attrs['colors'])) or '—'} · "
                  f"**Brand:** {attrs['brand'] or '—'}")
-        st.write(f"**Distinctive marks:** {', '.join(sorted(attrs['marks'])) or '—'} · "
-                 f"**Place mentioned:** {attrs['place'] or '—'}")
         if len(pool):
             idx = get_index(embedder, pool["description"].tolist())
             st.caption(f"Compared against {len(pool)} stored {other} report(s) using a "
