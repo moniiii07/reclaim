@@ -12,14 +12,13 @@ Every heavy dependency has a fallback so the app always runs:
   sentence-transformers    -> TF-IDF vectors
   faiss missing            -> NumPy inner-product search
 """
-from __future__ import annotations
-
 import hashlib
 import json
 import math
 import os
 import re
 from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -265,7 +264,7 @@ def _colors(a: set, b: set) -> float:
     return matched / (len(a) + len(b) - matched)
 
 
-def _parse_date(d) -> date | None:
+def _parse_date(d: Any) -> Optional[date]:
     """Parse a date; return None when it is missing or unreadable (blank, NaT, junk)."""
     if d is None or (not isinstance(d, str) and pd.isna(d)):   # None / NaN / NaT
         return None
@@ -290,7 +289,7 @@ def attribute_score(a: dict, b: dict, loc_sim: float, t_score: float) -> float:
             + w["location"] * loc_sim + w["time"] * t_score)
 
 
-def apply_vetoes(score: float, a: dict, b: dict) -> tuple[float, str | None]:
+def apply_vetoes(score: float, a: dict, b: dict) -> Tuple[float, Optional[str]]:
     if a["type"] and b["type"] and a["type"] != b["type"]:
         return min(score, 0.20), "Different item types"
     if a["brand"] and b["brand"] and a["brand"] != b["brand"]:
@@ -311,7 +310,12 @@ def _fmt(attrs: dict) -> str:
     return f"type={attrs['type']}, colours={sorted(attrs['colors'])}, brand={attrs['brand']}"
 
 
-def llm_verify(lost: dict, found: dict, lost_attrs: dict, found_attrs: dict) -> dict | None:
+def llm_verify(
+    lost: Dict[str, Any],
+    found: Dict[str, Any],
+    lost_attrs: Dict[str, Any],
+    found_attrs: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
     """Ask the LLM whether the two reports are compatible; returns score, similarities, differences."""
     if not llm_available():
         return None
