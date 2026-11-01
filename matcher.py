@@ -311,7 +311,10 @@ def _parse_date(d) -> date:
 
 
 def time_score(lost_date, found_date) -> float:
-    days = (_parse_date(found_date) - _parse_date(lost_date)).days
+    try:
+        days = (_parse_date(found_date) - _parse_date(lost_date)).days
+    except Exception:           # missing / unreadable date -> neutral
+        return 0.5
     return 0.2 if days < 0 else math.exp(-days / 7)
 
 

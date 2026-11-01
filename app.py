@@ -12,9 +12,14 @@ from matcher import (LIKELY_T, POSSIBLE_T, Embedder, extract_attributes, find_ma
 DATA = "data/reports.csv"
 NOTIFY_LOG = "data/notifications.csv"
 
+COLS = ["id", "type", "description", "location", "date", "contact", "match_id"]
+
 os.makedirs("data", exist_ok=True)
 if not os.path.exists(DATA):
-    shutil.copy("data/sample_reports.csv", DATA)
+    if os.path.exists("data/sample_reports.csv"):
+        shutil.copy("data/sample_reports.csv", DATA)
+    else:
+        pd.DataFrame(columns=COLS).to_csv(DATA, index=False)
 
 st.set_page_config(page_title="ReClaim", page_icon="🔎", layout="wide")
 
@@ -65,7 +70,16 @@ def get_embedder():
 
 
 def load() -> pd.DataFrame:
-    return pd.read_csv(DATA, dtype=str, keep_default_na=False)
+    """Read the reports CSV and make sure every expected column exists."""
+    df = pd.read_csv(DATA, dtype=str, keep_default_na=False)
+    for c in COLS:
+        if c not in df.columns:
+            df[c] = ""
+    # give rows without an id a unique one (L1, F2, ...)
+    for i in df.index[df["id"].str.strip() == ""]:
+        prefix = "L" if str(df.at[i, "type"]).lower().startswith("l") else "F"
+        df.at[i, "id"] = f"{prefix}{i + 1}"
+    return df
 
 
 def add_report(rtype, desc, loc, d, contact) -> str:
@@ -78,7 +92,7 @@ def add_report(rtype, desc, loc, d, contact) -> str:
         rid = f"{prefix}{n}"
     row = {"id": rid, "type": rtype, "description": desc, "location": loc,
            "date": str(d), "contact": contact, "match_id": ""}
-    pd.concat([df, pd.DataFrame([row])]).to_csv(DATA, index=False)
+    pd.concat([df, pd.DataFrame([row])], ignore_index=True)[COLS].to_csv(DATA, index=False)
     return rid
 
 
@@ -261,15 +275,18 @@ with tab1:
 
 with tab2:
     df = load()
-    pick = st.selectbox("Choose a report", df.id.tolist(),
-                        format_func=lambda i: f"{i} - {df.set_index('id').loc[i, 'description'][:70]}")
-    if st.button("Find matches", key="find"):
-        st.session_state.q2 = df.set_index("id").loc[pick].to_dict() | {"id": pick}
-    if st.session_state.get("q2"):
-        show_matches(st.session_state.q2, scope="t2")
+    if df.empty:
+        st.info("No reports yet. Submit one in the first tab.")
+    else:
+        pick = st.selectbox("Choose a report", df.id.tolist(),
+                            format_func=lambda i: f"{i} - {df.set_index('id').loc[i, 'description'][:70]}")
+        if st.button("Find matches", key="find"):
+            st.session_state.q2 = df.set_index("id").loc[pick].to_dict() | {"id": pick}
+        if st.session_state.get("q2"):
+            show_matches(st.session_state.q2, scope="t2")
 
 with tab3:
-    st.dataframe(load().drop(columns=["contact", "match_id"]), hide_index=True)
+    st.dataframe(load().drop(columns=["contact", "match_id"], errors="ignore"), hide_index=True)
     if os.path.exists(NOTIFY_LOG):
         st.caption("Notifications to lost-item owners (contacts masked):")
         log = pd.read_csv(NOTIFY_LOG)
